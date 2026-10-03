@@ -192,6 +192,22 @@ fn i3_invalid_calls_are_errors_never_calls() {
             "invalid_arguments",
         ),
         ("trailing <<send_email", "invalid_arguments"),
+        // Native call markup instead of the compact format (seen live from kimi-k2.5): an
+        // intended call, so an error the caller retries — never text handed to the client.
+        (
+            " I'll read it. <|tool_calls_section_begin|> <|tool_call_begin|> functions.read_file:0",
+            "invalid_arguments",
+        ),
+        (
+            "[TOOL_CALLS]create_calendar_event{\"title\":\"a\",\"start\":\"b\"}",
+            "invalid_arguments",
+        ),
+        (
+            "<tool_call>
+{\"name\": \"send_email\", \"arguments\": {}}
+</tool_call>",
+            "invalid_arguments",
+        ),
         // Seen live from qwen3-32b: `}}>` instead of `}>>`.
         (
             "<<call create_calendar_event {\"title\":\"a\",\"start\":\"b\" }}>",
@@ -505,4 +521,20 @@ fn i8_every_agent_tool_accepts_valid_calls_and_rejects_broken_ones() {
     }
     assert_eq!(valid, 57);
     assert!(rejected >= 57 * 2, "rejected only {rejected}");
+}
+
+#[test]
+fn i4_native_markup_is_caught_at_every_split_point() {
+    let tools = eval_tools();
+    for text in [
+        "Sure. <|tool_calls_section_begin|> functions.send_email:0",
+        "ok [TOOL_CALLS]send_email{}",
+        "<tool_call>{}</tool_call>",
+    ] {
+        for (i, _) in text.char_indices() {
+            let (a, b) = text.split_at(i);
+            let err = stream(&[a, b], &tools).expect_err(text);
+            assert_eq!(err.code(), "invalid_arguments", "split at {i}: {text}");
+        }
+    }
 }

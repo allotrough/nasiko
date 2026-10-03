@@ -31,6 +31,10 @@
 //!
 //! A token summary (o200k_base, full request body) goes to stderr; it is a convenience, not a
 //! claim — the scorer recounts.
+//!
+//! The fixed reference time (`Today: 2026-10-02 (Asia/Kolkata)`) goes only into live requests,
+//! on the compact and the native arm alike, so offline `compact_request` compares like for like
+//! with the `{messages, tools}` baseline.
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -92,19 +96,14 @@ fn main() -> Result<(), BoxError> {
         let native = json!({"messages": messages, "tools": tools});
         let (request, compacted) = match encode_tools_with(&defs, &opts) {
             Ok(compact) => {
-                let mut msgs = vec![json!({
-                    "role": "system",
-                    "content": format!("{REFERENCE}\n{}", compact.text()),
-                })];
+                let mut msgs = vec![json!({"role": "system", "content": compact.text()})];
                 msgs.extend(messages.iter().cloned());
                 (json!({"messages": msgs}), true)
             }
             // Outside the grammar: send natively. Counts as 0% savings, never a lossy guess.
             Err(_) => {
                 bypassed += 1;
-                let mut msgs = vec![json!({"role": "system", "content": REFERENCE})];
-                msgs.extend(messages.iter().cloned());
-                (json!({"messages": msgs, "tools": tools}), false)
+                (native.clone(), false)
             }
         };
         native_sum += tokens(&native);
@@ -116,16 +115,24 @@ fn main() -> Result<(), BoxError> {
             .map(render_call)
             .collect::<Vec<_>>()
             .join("\n");
+        // The reference time is context for live runs, not part of compaction: offline, the
+        // request is compared like for like with the scorer's `{messages, tools}` baseline; live,
+        // both arms carry the same line (see `Live::run`) and `OUT` records what was sent.
+        let sent = if live.is_some() {
+            with_reference(&request)
+        } else {
+            request.clone()
+        };
         let mut line = json!({
             "id": id,
-            "compact_request": request,
+            "compact_request": sent,
             "compacted": compacted,
             "rendered_calls": rendered,
             "roundtrip_calls": calls_or_error(decode_calls(&rendered, &defs)),
         });
 
         if let Some(live) = &live {
-            live.run(&mut line, &request, compacted, &native, &defs);
+            live.run(&mut line, &sent, compacted, &native, &defs);
         }
         writeln!(out, "{line}")?;
     }
@@ -158,6 +165,22 @@ fn main() -> Result<(), BoxError> {
     }
     eprintln!("{summary}; {bypassed} case(s) bypassed; wrote {out_path}");
     Ok(())
+}
+
+/// `body` with the fixed reference time: merged into a leading system message if there is one
+/// (the compact definitions), otherwise as a new leading system message.
+fn with_reference(body: &Value) -> Value {
+    let mut body = body.clone();
+    if let Some(msgs) = body["messages"].as_array_mut() {
+        match msgs.first_mut() {
+            Some(m) if m["role"] == "system" && m["content"].is_string() => {
+                let text = m["content"].as_str().unwrap_or_default();
+                m["content"] = json!(format!("{REFERENCE}\n{text}"));
+            }
+            _ => msgs.insert(0, json!({"role": "system", "content": REFERENCE})),
+        }
+    }
+    body
 }
 
 /// The case's tools, looked up by name in the file's catalog.
@@ -269,10 +292,7 @@ impl Live {
             Err(e) => line["live_error"] = json!(e.to_string()),
         }
         if self.baseline {
-            let mut req = native.clone();
-            if let Some(m) = req["messages"].as_array_mut() {
-                m.insert(0, json!({"role": "system", "content": REFERENCE}));
-            }
+            let req = with_reference(native);
             match rt.block_on(self.send(&req)) {
                 Ok(resp) => {
                     line["native_calls"] = native_calls(&resp["choices"][0]["message"]);

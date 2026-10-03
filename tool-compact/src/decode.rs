@@ -20,6 +20,18 @@ const OPEN: &str = "<<call";
 const MAX_CALL_BYTES: usize = 1 << 20;
 /// Longest word held after `<<` while deciding whether it is a call.
 const MAX_NAME_BYTES: usize = 128;
+/// Native tool-call markup that models fall back to when they ignore the compact format
+/// (Kimi, Mistral, Hermes/Qwen, Llama). Seen as text, it is a call the client must not receive:
+/// it fails the turn so the caller retries with native tools.
+const NATIVE_MARKERS: [&str; 5] = [
+    "<|tool_calls_section_begin|>",
+    "<|tool_call_begin|>",
+    "[TOOL_CALLS]",
+    "<tool_call>",
+    "<|python_tag|>",
+];
+/// Enough trailing text to recognise the longest marker across chunk boundaries.
+const RECENT_KEEP: usize = 32;
 
 /// Write `call` in the compact call grammar.
 pub fn render_call(call: &ToolCall) -> String {
@@ -77,6 +89,8 @@ pub struct StreamDecoder {
     state: State,
     calls: Vec<ToolCall>,
     error: Option<Error>,
+    /// Tail of the text emitted so far, for [`NATIVE_MARKERS`].
+    recent: String,
 }
 
 impl StreamDecoder {
@@ -98,6 +112,7 @@ impl StreamDecoder {
             state: State::Text,
             calls: Vec::new(),
             error: None,
+            recent: String::new(),
         })
     }
 
@@ -131,6 +146,23 @@ impl StreamDecoder {
         self.tools.iter().any(|(n, _)| n == name)
     }
 
+    /// Pass one char of plain text through; `false` if it completed native call markup.
+    fn emit(&mut self, c: char, out: &mut String) -> bool {
+        out.push(c);
+        self.recent.push(c);
+        if self.recent.len() > 8 * RECENT_KEEP {
+            let skip = self.recent.chars().count().saturating_sub(RECENT_KEEP);
+            self.recent = self.recent.chars().skip(skip).collect();
+        }
+        if NATIVE_MARKERS.iter().any(|m| self.recent.ends_with(m)) {
+            self.fail(Error::Malformed(
+                "native tool-call markup instead of `<<call`",
+            ));
+            return false;
+        }
+        true
+    }
+
     fn fail(&mut self, e: Error) {
         if self.error.is_none() {
             self.error = Some(e);
@@ -144,7 +176,9 @@ impl StreamDecoder {
             State::Failed => State::Failed,
             State::Text if c == '<' => State::Marker("<".into()),
             State::Text => {
-                out.push(c);
+                if !self.emit(c, out) {
+                    return;
+                }
                 State::Text
             }
             State::Marker(mut held) => {
@@ -168,8 +202,10 @@ impl StreamDecoder {
                     // Not a call: emit the first char, re-scan the rest (it may hold a real `<`).
                     held.push(c);
                     let mut chars = held.chars();
-                    if let Some(first) = chars.next() {
-                        out.push(first);
+                    if let Some(first) = chars.next()
+                        && !self.emit(first, out)
+                    {
+                        return;
                     }
                     for (i, rc) in chars.enumerate() {
                         queue.insert(i, rc);
