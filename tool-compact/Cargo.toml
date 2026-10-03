@@ -1,0 +1,9 @@
+[package]
+name = "nasiko-tool-compact"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+# Tool schemas and call arguments are JSON; validation walks the parsed value.
+serde_json = { workspace = true }
+thiserror = { workspace = true }

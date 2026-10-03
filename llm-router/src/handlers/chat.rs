@@ -288,6 +288,19 @@ async fn chat_core(
         "brevity: directive decision"
     );
 
+    // ── compact tools seam ────────────────────────────────────────────────────────────────
+    // After brevity, so the untouched copy kept for the native retry carries the directive too;
+    // brevity's tool-continuation check still sees the native `tools`, and compaction never runs
+    // mid tool-loop anyway (`HistoryHasToolCalls`). Before the savings inputs, so `sent_bytes`
+    // measures the compact payload that is actually sent.
+    let compact = crate::compact_tools::apply(&mut req, &ctx.cfg, &resolved);
+    tracing::debug!(
+        target: "nasiko::llm_router::compact_tools",
+        %agent_id,
+        metadata = %crate::compact_tools::to_metadata(&compact, false),
+        "compact_tools: decision"
+    );
+
     // ── savings ledger inputs ─────────────────────────────────────────────────────────────
     // Measured here, after both seams, because this is the payload the provider will actually
     // bill for — which is what makes `sent_bytes / reported_input_tokens` a calibration rather
@@ -325,6 +338,8 @@ async fn chat_core(
         nasiko.compress.bytes_out = tracing::field::Empty,
         nasiko.compress.elapsed_us = tracing::field::Empty,
         nasiko.brevity.applied = brevity.is_ok(),
+        nasiko.compact_tools.applied = compact.is_ok(),
+        nasiko.compact_tools.native_retry = tracing::field::Empty,
         // The cache classes are recorded too, or the trace-derived cost of a
         // cached call is wrong in a way nothing downstream can detect: an
         // absent cache attribute is indistinguishable from a cache miss, so the
@@ -371,9 +386,31 @@ async fn chat_core(
     }
 
     // Non-streaming: run with ordered fallbacks; usage records the effective provider/model.
-    let (resp, (provider, model)) = fallback::execute_chat(&ctx.http, &ctx.cfg, &resolved, &req)
-        .instrument(llm_span.clone())
-        .await?;
+    let (mut resp, (mut provider, mut model)) =
+        fallback::execute_chat(&ctx.http, &ctx.cfg, &resolved, &req)
+            .instrument(llm_span.clone())
+            .await?;
+    // Compact calls come back as text: rebuild native `tool_calls`, or — if the model wrote a call
+    // the original schemas reject — never repair it: re-send the client's own request with native
+    // tools. Both attempts are billed, so both are logged.
+    let mut billed_usage = resp.usage.clone();
+    if let Ok(applied) = &compact
+        && let Err(e) = crate::compact_tools::decode_response(&mut resp, applied)
+    {
+        tracing::warn!(
+            target: "nasiko::llm_router::compact_tools",
+            %agent_id,
+            error = %e,
+            "compact_tools: model output rejected; retrying with native tools"
+        );
+        llm_span.record("nasiko.compact_tools.native_retry", true);
+        let first = resp.usage.take();
+        (resp, (provider, model)) =
+            fallback::execute_chat(&ctx.http, &ctx.cfg, &resolved, &applied.native)
+                .instrument(llm_span.clone())
+                .await?;
+        billed_usage = crate::compact_tools::sum_usage(first, resp.usage.clone());
+    }
     let latency_ms = started.elapsed().as_millis() as i64;
 
     // Record effective model and token usage on the server-side gen_ai span.
@@ -389,7 +426,7 @@ async fn chat_core(
             operation_type: "direct_llm",
             provider,
             model,
-            usage: resp.usage.clone(),
+            usage: billed_usage,
             cached_tokens: None,
             reasoning_tokens: None,
             latency_ms,
@@ -1533,5 +1570,289 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, GatewayError::BadRequest(_)));
+    }
+
+    // ── compact tools: the wire, end to end ───────────────────────────────────────────────
+    //
+    // `compact_tools::tests` covers the transform and the decoder. These cover what only the
+    // handler can show: what the provider is sent, what the client gets back, and the native
+    // retry when the model's compact call is rejected.
+
+    fn weather_request() -> serde_json::Value {
+        json!({
+            "model": "gpt-4o",
+            "messages": [{ "role": "user", "content": "Weather in Paris?" }],
+            "tools": [{ "type": "function", "function": {
+                "name": "get_weather", "description": "Current weather for a city.",
+                "parameters": { "type": "object",
+                    "properties": { "city": { "type": "string", "description": "City name" } },
+                    "required": ["city"] } } }]
+        })
+    }
+
+    fn completion(message: serde_json::Value) -> String {
+        json!({
+            "id": "chatcmpl-x", "object": "chat.completion", "model": "gpt-4o",
+            "choices": [{ "index": 0, "message": message, "finish_reason": "stop" }],
+            "usage": { "prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7 }
+        })
+        .to_string()
+    }
+
+    fn compact_ctx(base: String, enabled: bool) -> LlmRouterCtx {
+        let mut ctx = ctx_with(base);
+        ctx.cfg = Arc::new(GatewayConfig {
+            compact_tools_enabled: enabled,
+            ..(*ctx.cfg).clone()
+        });
+        ctx
+    }
+
+    /// Runs one request; returns (bodies the provider received, client response JSON).
+    async fn compact_round_trip(
+        enabled: bool,
+        replies: Vec<serde_json::Value>,
+    ) -> (Vec<String>, serde_json::Value) {
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let capture = Arc::clone(&seen);
+        let replies = Arc::new(replies);
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(move |request| {
+                let body = request.body().map(Vec::as_slice).unwrap_or_default();
+                let mut seen = capture.lock().unwrap_or_else(|e| e.into_inner());
+                seen.push(String::from_utf8_lossy(body).into_owned());
+                completion(replies[(seen.len() - 1).min(replies.len() - 1)].clone()).into_bytes()
+            })
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let ctx = compact_ctx(server.url(), enabled);
+        let store = Store {
+            config: None,
+            is_coding_agent: false,
+            compress_enabled: true,
+        };
+        let resp = chat_core(
+            &ctx,
+            &store,
+            &auth_headers(&token()),
+            weather_request(),
+            InboundFormat::OpenAi,
+            None,
+        )
+        .await
+        .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+        let seen = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        (seen, body)
+    }
+
+    #[tokio::test]
+    async fn compact_tools_off_sends_the_native_tools_unchanged() {
+        let (sent, _) =
+            compact_round_trip(false, vec![json!({"role": "assistant", "content": "ok"})]).await;
+        assert_eq!(sent.len(), 1);
+        let body: serde_json::Value = serde_json::from_str(&sent[0]).unwrap();
+        assert_eq!(body["tools"], weather_request()["tools"]);
+        assert!(!sent[0].contains("<<call"));
+    }
+
+    #[tokio::test]
+    async fn compact_tools_on_sends_signatures_and_returns_native_tool_calls() {
+        let (sent, client) = compact_round_trip(
+            true,
+            vec![json!({"role": "assistant",
+                        "content": "<<call get_weather {\"city\":\"Paris\"}>>"})],
+        )
+        .await;
+        assert_eq!(sent.len(), 1, "a valid compact call needs no retry");
+        let body: serde_json::Value = serde_json::from_str(&sent[0]).unwrap();
+        assert!(
+            body.get("tools").is_none(),
+            "native tools still sent: {}",
+            sent[0]
+        );
+        assert!(
+            body["messages"][0]["content"]
+                .as_str()
+                .unwrap()
+                .starts_with("get_weather(city:str \"City name\")")
+        );
+
+        let msg = &client["choices"][0]["message"];
+        assert_eq!(msg["tool_calls"][0]["type"], "function");
+        assert_eq!(msg["tool_calls"][0]["function"]["name"], "get_weather");
+        assert_eq!(
+            msg["tool_calls"][0]["function"]["arguments"],
+            r#"{"city":"Paris"}"#
+        );
+        assert!(
+            msg["content"].is_null(),
+            "the compact text must not leak: {msg}"
+        );
+        assert_eq!(client["choices"][0]["finish_reason"], "tool_calls");
+    }
+
+    #[tokio::test]
+    async fn a_rejected_compact_call_is_retried_with_native_tools() {
+        let native_call = json!({"role": "assistant", "content": null, "tool_calls": [
+            {"id": "call_native", "type": "function",
+             "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"}}]});
+        let (sent, client) = compact_round_trip(
+            true,
+            vec![
+                // Missing the required `city`: rejected, never repaired.
+                json!({"role": "assistant", "content": "<<call get_weather {}>>"}),
+                native_call,
+            ],
+        )
+        .await;
+        assert_eq!(
+            sent.len(),
+            2,
+            "expected the compact attempt plus one native retry"
+        );
+        assert!(!sent[0].contains("\"tools\""));
+        let retry: serde_json::Value = serde_json::from_str(&sent[1]).unwrap();
+        assert_eq!(
+            retry["tools"],
+            weather_request()["tools"],
+            "the retry is the client's request"
+        );
+        assert_eq!(
+            client["choices"][0]["message"]["tool_calls"][0]["id"],
+            "call_native"
+        );
+    }
+
+    /// Live, report-only: the same requests through `chat_core` with compact tools off and on,
+    /// against a real OpenAI-compatible endpoint. Needs network and a key, so it is ignored:
+    ///
+    /// ```sh
+    /// PROVIDER_BASE_URL=… PROVIDER_API_KEY=… MODEL=… \
+    ///   cargo test -p nasiko-llm-router live_compact_tools -- --ignored --nocapture
+    /// ```
+    #[tokio::test]
+    #[ignore = "live: needs PROVIDER_BASE_URL, PROVIDER_API_KEY, MODEL"]
+    async fn live_compact_tools_off_vs_on() {
+        let (Ok(base), Ok(key), Ok(model)) = (
+            std::env::var("PROVIDER_BASE_URL"),
+            std::env::var("PROVIDER_API_KEY"),
+            std::env::var("MODEL"),
+        ) else {
+            eprintln!("skipped: PROVIDER_BASE_URL / PROVIDER_API_KEY / MODEL not set");
+            return;
+        };
+        let agents: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tool-compact/tests/fixtures/agent_tools.json"
+        ))
+        .unwrap();
+        let date = "Today: 2026-10-02 (Asia/Kolkata)";
+        // (label, tools, user message, tool names a correct answer calls)
+        let cases = [
+            (
+                "hr-clock",
+                agents["hr-agent"].clone(),
+                "What time is it in Tokyo right now?",
+                vec!["world_clock"],
+            ),
+            (
+                "weather",
+                agents["weather"].clone(),
+                "Find the coordinates of Lisbon.",
+                vec!["geocode"],
+            ),
+            (
+                "github",
+                agents["github"].clone(),
+                "Search GitHub repositories about rust http clients.",
+                vec!["search_repos"],
+            ),
+            (
+                "docs",
+                agents["docs"].clone(),
+                "Look up the serde crate on crates.io.",
+                vec!["crates_io"],
+            ),
+            (
+                "coding",
+                agents["coding"].clone(),
+                "List the files in the src directory.",
+                vec!["list_directory"],
+            ),
+            (
+                "no-call",
+                agents["weather"].clone(),
+                "Say hello in French.",
+                vec![],
+            ),
+        ];
+        println!(
+            "{:<9} {:>6} {:>6} {:>7}  {:<28} {:<28}",
+            "case", "off_in", "on_in", "saved", "off calls", "on calls"
+        );
+        let (mut off_sum, mut on_sum, mut agree) = (0i64, 0i64, 0);
+        for (label, tools, prompt, want) in &cases {
+            let mut out = Vec::new();
+            for enabled in [false, true] {
+                let mut ctx = compact_ctx(base.clone(), enabled);
+                // A stalled endpoint must fail this report, not hang it.
+                ctx.http = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(90))
+                    .build()
+                    .unwrap();
+                ctx.cfg = Arc::new(GatewayConfig {
+                    platform_openai_api_key: key.clone(),
+                    ..(*ctx.cfg).clone()
+                });
+                let store = Store {
+                    config: None,
+                    is_coding_agent: false,
+                    compress_enabled: true,
+                };
+                let body = json!({
+                    "model": model, "temperature": 0,
+                    "messages": [{"role": "system", "content": date}, {"role": "user", "content": prompt}],
+                    "tools": tools,
+                });
+                let resp = chat_core(
+                    &ctx,
+                    &store,
+                    &auth_headers(&token()),
+                    body,
+                    InboundFormat::OpenAi,
+                    None,
+                )
+                .await
+                .unwrap_or_else(|e| panic!("{label} enabled={enabled}: {e:?}"));
+                let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+                let names: Vec<String> = v["choices"][0]["message"]["tool_calls"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|c| c["function"]["name"].as_str().unwrap_or("?").to_string())
+                    .collect();
+                out.push((v["usage"]["prompt_tokens"].as_i64().unwrap_or(0), names));
+            }
+            let ((off_in, off_calls), (on_in, on_calls)) = (&out[0], &out[1]);
+            off_sum += off_in;
+            on_sum += on_in;
+            agree += (on_calls == want) as i32;
+            println!(
+                "{label:<9} {off_in:>6} {on_in:>6} {:>6.0}%  {:<28} {:<28}",
+                100.0 * (1.0 - *on_in as f64 / *off_in as f64),
+                format!("{off_calls:?}"),
+                format!("{on_calls:?}")
+            );
+        }
+        println!(
+            "TOTAL     {off_sum:>6} {on_sum:>6} {:>6.0}%  compact correct {agree}/{}",
+            100.0 * (1.0 - on_sum as f64 / off_sum as f64),
+            cases.len()
+        );
     }
 }

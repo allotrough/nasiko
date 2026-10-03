@@ -4,6 +4,7 @@ members = [
     # ─── OSS crates ─────────────────────────────────────────────────────────
     "auth",
     "compress",
+    "tool-compact",
     "config",
     "secrets",
     "observability",
@@ -36,6 +37,7 @@ version = "0.1.0"
 # ─── Internal OSS crates ────────────────────────────────────────────────────
 nasiko-auth = { path = "auth" }
 nasiko-compress = { path = "compress" }
+nasiko-tool-compact = { path = "tool-compact" }
 nasiko-config = { path = "config" }
 nasiko-pricing = { path = "pricing" }
 nasiko-savings = { path = "savings" }
@@ -159,6 +161,9 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 thiserror = "2"
 anyhow = "1"
+# Dev-only: o200k_base token counts in llm-router's compact_tools_eval example. Pinned so the
+# reported numbers are reproducible; never a dependency of a library or the router.
+tiktoken-rs = "=0.7.0"
 base64 = "0.22"
 dotenvy = "0.15"
 

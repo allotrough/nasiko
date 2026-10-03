@@ -1,0 +1,1321 @@
+{
+ "coding": [
+  {
+   "type": "function",
+   "function": {
+    "name": "read_file",
+    "description": "Read a file from the workspace. Returns content with 1-based line numbers. Read before editing.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string",
+       "description": "Path relative to the workspace root"
+      },
+      "start_line": {
+       "type": "integer",
+       "description": "Optional 1-based first line to return"
+      },
+      "end_line": {
+       "type": "integer",
+       "description": "Optional 1-based last line to return (inclusive)"
+      }
+     },
+     "required": [
+      "path"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "list_directory",
+    "description": "List files/directories under a workspace path (recursive). Skips .git, target, node_modules.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string",
+       "description": "Path relative to the workspace root",
+       "default": "."
+      },
+      "depth": {
+       "type": "integer",
+       "description": "Max recursion depth (omit for unbounded)"
+      }
+     }
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "search_code",
+    "description": "Search the workspace for a pattern (uses ripgrep if available). Returns file:line: match lines. Use this before write_file to check whether equivalent logic already exists.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "pattern": {
+       "type": "string",
+       "description": "Regex or literal text to search for"
+      },
+      "path": {
+       "type": "string",
+       "description": "Subdirectory to limit the search to",
+       "default": "."
+      },
+      "glob": {
+       "type": "string",
+       "description": "Optional file glob filter, e.g. '*.rs'"
+      }
+     },
+     "required": [
+      "pattern"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "write_file",
+    "description": "Create or overwrite a file with the given content. Use edit_file for targeted changes to existing files. Prefer edit_file or extending an existing file; only use this for a genuinely new file.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string",
+       "description": "Path relative to the workspace root"
+      },
+      "content": {
+       "type": "string",
+       "description": "Full file content"
+      }
+     },
+     "required": [
+      "path",
+      "content"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "edit_file",
+    "description": "Make a targeted edit using search/replace. The `search` block must appear EXACTLY ONCE in the file; it is replaced with `replace`. Provide multiple {search,replace} objects in `edits` to apply several edits in one call (applied in order).",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string",
+       "description": "Path relative to the workspace root"
+      },
+      "search": {
+       "type": "string",
+       "description": "Exact text to find (must be unique). Omit if using `edits`."
+      },
+      "replace": {
+       "type": "string",
+       "description": "Replacement text. Omit if using `edits`."
+      },
+      "edits": {
+       "type": "array",
+       "description": "Multiple edits applied in order",
+       "items": {
+        "type": "object",
+        "properties": {
+         "search": {
+          "type": "string"
+         },
+         "replace": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "search",
+         "replace"
+        ]
+       }
+      }
+     },
+     "required": [
+      "path"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "run_command",
+    "description": "Run a shell command in the workspace root (build, lint, format, etc.). Returns stdout, stderr, and exit code.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "command": {
+       "type": "string",
+       "description": "Shell command to run via `sh -c`"
+      },
+      "timeout_s": {
+       "type": "integer",
+       "description": "Optional wall-clock timeout in seconds"
+      }
+     },
+     "required": [
+      "command"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "run_tests",
+    "description": "Run the project's test suite. Auto-detects the command (cargo test / npm test / pytest / go test) unless `command` is given.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "command": {
+       "type": "string",
+       "description": "Optional explicit test command override"
+      },
+      "timeout_s": {
+       "type": "integer",
+       "description": "Optional wall-clock timeout in seconds"
+      }
+     }
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "update_instructions",
+    "description": "Add a new instruction to the workspace instruction file (NASIKO.md) with a structured prompt comment recording why it was added. Use this when you discover a pattern, convention, or rule that should persist across future sessions \u2014 e.g. after fixing a recurring bug, discovering a project convention, or when the user asks you to remember something. The instruction is stored with rationale metadata so it can be maintained over time.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "instruction": {
+       "type": "string",
+       "description": "The instruction text (what the agent should do in future sessions)"
+      },
+      "trigger": {
+       "type": "string",
+       "description": "What failure or observation led to this instruction (the 'why now')"
+      },
+      "hypothesis": {
+       "type": "string",
+       "description": "Why this instruction should help (the expected benefit)"
+      }
+     },
+     "required": [
+      "instruction",
+      "trigger",
+      "hypothesis"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "prune_instructions",
+    "description": "Review and prune stale or unhelpful instructions from the workspace instruction file. Use this when the user asks to clean up, prune, or review their instructions. This triggers a review of all annotated instructions and revokes ones that are no longer relevant. Works regardless of the @pruning directive setting.",
+    "parameters": {
+     "type": "object",
+     "properties": {}
+    }
+   }
+  }
+ ],
+ "devops-agent": [
+  {
+   "type": "function",
+   "function": {
+    "name": "github_repo_info",
+    "description": "Get info about a GitHub repository including stars, forks, open issues, language, and description.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "owner": {
+       "type": "string",
+       "description": "Repository owner (user or organization)"
+      },
+      "repo": {
+       "type": "string",
+       "description": "Repository name"
+      }
+     },
+     "required": [
+      "owner",
+      "repo"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "github_actions_runs",
+    "description": "List recent CI/CD workflow runs for a GitHub repository. Shows workflow name, status, conclusion, branch, and trigger event.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "owner": {
+       "type": "string",
+       "description": "Repository owner (user or organization)"
+      },
+      "repo": {
+       "type": "string",
+       "description": "Repository name"
+      }
+     },
+     "required": [
+      "owner",
+      "repo"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "docker_hub_search",
+    "description": "Search Docker Hub for container images. Returns image name, description, star count, pull count, and whether it's an official image.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "description": "Search query for Docker Hub images"
+      }
+     },
+     "required": [
+      "query"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "check_endpoint",
+    "description": "Check if an HTTP endpoint is responding and measure its latency. Reports status code, response time, content-type, and health status.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "url": {
+       "type": "string",
+       "description": "The URL to check (must include scheme, e.g. https://example.com)"
+      }
+     },
+     "required": [
+      "url"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "web_search",
+    "description": "Search the web for DevOps documentation, tutorials, best practices, or troubleshooting guides. Use when existing tools don't cover the question.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "description": "Search query for web results"
+      }
+     },
+     "required": [
+      "query"
+     ]
+    }
+   }
+  }
+ ],
+ "docs": [
+  {
+   "type": "function",
+   "function": {
+    "name": "crates_io",
+    "description": "Search crates.io for Rust crates. Returns name, version, description, and documentation links. Use when the user asks about Rust libraries.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "description": "Crate name or search query"
+      },
+      "sort": {
+       "type": "string",
+       "enum": [
+        "downloads",
+        "relevance",
+        "recent-downloads"
+       ],
+       "description": "Sort order for results (default: downloads)"
+      }
+     },
+     "required": [
+      "query"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "crate_info",
+    "description": "Get detailed info about a specific Rust crate: version history, features, dependencies, and docs.rs link.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "name": {
+       "type": "string",
+       "description": "Exact crate name"
+      },
+      "version": {
+       "type": "string",
+       "description": "Specific version (optional, defaults to latest)"
+      }
+     },
+     "required": [
+      "name"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "npm_search",
+    "description": "Search npm for JavaScript/TypeScript packages. Returns name, version, description. Use for Node.js/frontend library questions.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "description": "Package name or search query"
+      }
+     },
+     "required": [
+      "query"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "npm_package",
+    "description": "Get detailed info about a specific npm package: versions, dependencies, repository, and README excerpt.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "name": {
+       "type": "string",
+       "description": "Exact package name (e.g. 'zod', '@tanstack/react-query')"
+      },
+      "version": {
+       "type": "string",
+       "description": "Specific version (optional, defaults to latest)"
+      }
+     },
+     "required": [
+      "name"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "pypi_package",
+    "description": "Get info about a Python package from PyPI: version, description, dependencies, and project links.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "name": {
+       "type": "string",
+       "description": "Package name (e.g. 'fastapi', 'pydantic')"
+      }
+     },
+     "required": [
+      "name"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "github_readme",
+    "description": "Fetch the README of a GitHub repository. Use for understanding how to use a library when registry docs aren't enough.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "repo": {
+       "type": "string",
+       "description": "Repository in 'owner/repo' format (e.g. 'tokio-rs/tokio')"
+      }
+     },
+     "required": [
+      "repo"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "web_search",
+    "description": "Search the web for information. Use when you need to find documentation, blog posts, comparisons, or any information not available through package registries. Good for 'latest', 'best', 'comparison' queries.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "description": "Search query"
+      }
+     },
+     "required": [
+      "query"
+     ]
+    }
+   }
+  }
+ ],
+ "finance-agent": [
+  {
+   "type": "function",
+   "function": {
+    "name": "exchange_rates",
+    "description": "Get current exchange rates for a base currency. Returns conversion rates against other currencies.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "base": {
+       "type": "string",
+       "description": "Base currency code (e.g. \"USD\", \"EUR\", \"GBP\")"
+      },
+      "targets": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "description": "Optional list of target currency codes (e.g. [\"EUR\", \"GBP\"]). If omitted, returns top 10 rates."
+      }
+     },
+     "required": [
+      "base"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "crypto_price",
+    "description": "Get current price and market data for a cryptocurrency. Use the CoinGecko coin ID (e.g. \"bitcoin\", \"ethereum\", \"solana\").",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "coin_id": {
+       "type": "string",
+       "description": "CoinGecko coin ID (e.g. \"bitcoin\", \"ethereum\", \"cardano\")"
+      }
+     },
+     "required": [
+      "coin_id"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "crypto_search",
+    "description": "Search for a cryptocurrency by name or symbol. Useful when you don't know the exact CoinGecko ID for a coin.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "description": "Search query (name or symbol, e.g. \"bitcoin\" or \"BTC\")"
+      }
+     },
+     "required": [
+      "query"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "crypto_market",
+    "description": "Get top cryptocurrencies ranked by market cap. Returns prices, 24h changes, and market caps.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "limit": {
+       "type": "integer",
+       "description": "Number of results (5-20)",
+       "default": 10
+      }
+     }
+    }
+   }
+  }
+ ],
+ "hr-agent": [
+  {
+   "type": "function",
+   "function": {
+    "name": "public_holidays",
+    "description": "Get public holidays for a country and year. Returns holiday dates, names, and whether they are fixed or regional.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "country_code": {
+       "type": "string",
+       "description": "2-letter ISO country code (e.g. \"US\", \"DE\", \"JP\")"
+      },
+      "year": {
+       "type": "integer",
+       "description": "Year to get holidays for (e.g. 2025)"
+      }
+     },
+     "required": [
+      "country_code",
+      "year"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "working_days",
+    "description": "Calculate the number of working/business days between two dates, excluding weekends and public holidays for the given country.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "start_date": {
+       "type": "string",
+       "description": "Start date in YYYY-MM-DD format"
+      },
+      "end_date": {
+       "type": "string",
+       "description": "End date in YYYY-MM-DD format"
+      },
+      "country_code": {
+       "type": "string",
+       "description": "2-letter ISO country code for public holidays (e.g. \"US\", \"DE\", \"JP\")"
+      }
+     },
+     "required": [
+      "start_date",
+      "end_date",
+      "country_code"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "world_clock",
+    "description": "Get the current time in a specific timezone. Returns datetime, UTC offset, day of week, week number, and DST status.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "timezone": {
+       "type": "string",
+       "description": "IANA timezone name (e.g. \"America/New_York\", \"Europe/London\", \"Asia/Tokyo\")"
+      }
+     },
+     "required": [
+      "timezone"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "country_info",
+    "description": "Get country information including capital, region, income level, and latest population (World Bank data). Useful for understanding labor markets and regional context.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "name": {
+       "type": "string",
+       "description": "Country name (e.g. \"Germany\", \"Japan\", \"Brazil\")"
+      }
+     },
+     "required": [
+      "name"
+     ]
+    }
+   }
+  }
+ ],
+ "infra-agent": [
+  {
+   "type": "function",
+   "function": {
+    "name": "terraform_modules",
+    "description": "Search the Terraform Registry for modules. Returns module names, versions, descriptions, and download counts. Use for finding reusable infrastructure modules.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "description": "Search query (e.g. 'vpc', 'eks', 's3-bucket', 'lambda')"
+      }
+     },
+     "required": [
+      "query"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "terraform_provider",
+    "description": "Get information about a Terraform provider from the registry. Returns version, description, source repository, downloads, and tier (official/partner/community).",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "namespace": {
+       "type": "string",
+       "description": "Provider namespace (e.g. 'hashicorp', 'digitalocean', 'cloudflare')"
+      },
+      "name": {
+       "type": "string",
+       "description": "Provider name (e.g. 'aws', 'google', 'kubernetes', 'azurerm')"
+      }
+     },
+     "required": [
+      "namespace",
+      "name"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "dns_lookup",
+    "description": "Resolve DNS records for a domain using Google's DNS-over-HTTPS. Returns answer records with TTL and data. Useful for diagnosing DNS issues or verifying configurations.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "domain": {
+       "type": "string",
+       "description": "Domain name to resolve (e.g. 'example.com', 'api.github.com')"
+      },
+      "record_type": {
+       "type": "string",
+       "enum": [
+        "A",
+        "AAAA",
+        "CNAME",
+        "MX",
+        "TXT",
+        "NS"
+       ],
+       "description": "DNS record type to query (default: A)",
+       "default": "A"
+      }
+     },
+     "required": [
+      "domain"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "ssl_check",
+    "description": "Connect to a domain over TLS and inspect its certificate: issuer (CA), subject, validity dates, days until expiry, and whether it's trusted by public root CAs.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "domain": {
+       "type": "string",
+       "description": "Domain name to check (e.g. 'example.com')"
+      },
+      "port": {
+       "type": "integer",
+       "description": "TCP port to connect on (default: 443)",
+       "default": 443
+      }
+     },
+     "required": [
+      "domain"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "ip_info",
+    "description": "Get geolocation and network information for an IP address. Returns country, region, city, timezone, ISP, organization, and AS number.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "ip": {
+       "type": "string",
+       "description": "IP address to look up (e.g. '8.8.8.8', '1.1.1.1')"
+      }
+     },
+     "required": [
+      "ip"
+     ]
+    }
+   }
+  }
+ ],
+ "legal-agent": [
+  {
+   "type": "function",
+   "function": {
+    "name": "sec_filing_search",
+    "description": "Full-text search of SEC EDGAR filings. Search for keywords across all SEC filings including 10-K, 10-Q, 8-K, and more. Useful for finding disclosures, risk factors, financial statements, and regulatory filings.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "description": "Search query for full-text search across SEC filings"
+      },
+      "form_type": {
+       "type": "string",
+       "description": "Filter by form type (e.g. '10-K', '10-Q', '8-K', 'S-1', 'DEF 14A')"
+      },
+      "start_date": {
+       "type": "string",
+       "description": "Start date filter in YYYY-MM-DD format"
+      },
+      "end_date": {
+       "type": "string",
+       "description": "End date filter in YYYY-MM-DD format"
+      }
+     },
+     "required": [
+      "query"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "sec_company_filings",
+    "description": "Get recent SEC filings for a specific company by CIK number. Returns the company's most recent filings including form type, date, and description. CIK numbers can be found on the SEC EDGAR website.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "cik": {
+       "type": "string",
+       "description": "Company CIK number (will be zero-padded to 10 digits automatically)"
+      }
+     },
+     "required": [
+      "cik"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "sec_company_search",
+    "description": "Look up a public company's SEC CIK number by name or ticker. Use this before sec_company_filings, which requires a CIK rather than a company name.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "name": {
+       "type": "string",
+       "description": "Company name or ticker symbol to search for (e.g. 'Apple', 'AAPL')"
+      }
+     },
+     "required": [
+      "name"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "federal_register",
+    "description": "Search the U.S. Federal Register for regulations, proposed rules, notices, and presidential documents. The Federal Register is the official daily publication for rules, proposed rules, and notices of federal agencies.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "description": "Search query for Federal Register documents"
+      },
+      "document_type": {
+       "type": "string",
+       "enum": [
+        "RULE",
+        "PRRULE",
+        "NOTICE",
+        "PRESDOCU"
+       ],
+       "description": "Filter by document type: RULE (final rules), PRRULE (proposed rules), NOTICE (notices), PRESDOCU (presidential documents)"
+      }
+     },
+     "required": [
+      "query"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "case_law_search",
+    "description": "Search for court opinions and case law via CourtListener. Find judicial opinions from federal and state courts including the Supreme Court, Circuit Courts, and District Courts.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "description": "Search query for case law (supports natural language and legal citations)"
+      },
+      "court": {
+       "type": "string",
+       "description": "Filter by court identifier (e.g. 'scotus' for Supreme Court, 'ca1'-'ca11' for Circuit Courts)"
+      }
+     },
+     "required": [
+      "query"
+     ]
+    }
+   }
+  }
+ ],
+ "nutrition": [
+  {
+   "type": "function",
+   "function": {
+    "name": "search_food",
+    "description": "Search the USDA FoodData Central database for foods. Returns food names with IDs that can be used for detailed nutrition lookup.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "description": "Food item to search for (e.g. 'chicken breast', 'brown rice', 'avocado')"
+      },
+      "data_type": {
+       "type": "string",
+       "enum": [
+        "Foundation",
+        "SR Legacy",
+        "Branded",
+        "Survey"
+       ],
+       "description": "Optional \u2014 leave UNSET for ordinary foods and ingredients; the search already covers whole foods (Foundation + SR Legacy) by default. Set 'Branded' only for a specific packaged supermarket product. Never re-run the same query with a different value."
+      }
+     },
+     "required": [
+      "query"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "get_nutrition",
+    "description": "Get detailed nutrition facts for a specific food by its FDC ID. Returns calories, macros, vitamins, and minerals per 100g.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "fdc_id": {
+       "type": "integer",
+       "description": "FoodData Central ID (from search_food results)"
+      }
+     },
+     "required": [
+      "fdc_id"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "open_food_facts",
+    "description": "Search Open Food Facts for packaged/branded food products by name or barcode. Returns nutrition labels, ingredients, and Nutri-Score.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "description": "Product name or barcode to search for"
+      }
+     },
+     "required": [
+      "query"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "compare_foods",
+    "description": "Compare nutrition of multiple foods side by side. Takes a list of FDC IDs and returns a comparison table.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "fdc_ids": {
+       "type": "array",
+       "items": {
+        "type": "integer"
+       },
+       "description": "List of FoodData Central IDs to compare (2-5 items)"
+      }
+     },
+     "required": [
+      "fdc_ids"
+     ]
+    }
+   }
+  }
+ ],
+ "paper": [
+  {
+   "type": "function",
+   "function": {
+    "name": "arxiv_search",
+    "description": "Search arXiv for academic papers. Returns titles, authors, abstracts, and links. Use for finding research papers on any scientific or technical topic.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "description": "Search query (supports arXiv query syntax: ti:, au:, abs:, cat:)"
+      },
+      "max_results": {
+       "type": "integer",
+       "description": "Number of results to return (1-10)",
+       "default": 5
+      },
+      "sort_by": {
+       "type": "string",
+       "enum": [
+        "relevance",
+        "lastUpdatedDate",
+        "submittedDate"
+       ],
+       "default": "relevance"
+      }
+     },
+     "required": [
+      "query"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "semantic_scholar",
+    "description": "Search Semantic Scholar for papers with citation counts, influential citations, and related work. Better for finding highly-cited or influential papers.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "description": "Search query for papers"
+      },
+      "year": {
+       "type": "string",
+       "description": "Filter by year or range (e.g. '2024' or '2022-2024')"
+      },
+      "limit": {
+       "type": "integer",
+       "description": "Number of results (1-10)",
+       "default": 5
+      }
+     },
+     "required": [
+      "query"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "semantic_scholar_paper",
+    "description": "Get detailed info about a specific paper by its Semantic Scholar ID, arXiv ID, or DOI. Returns abstract, citations, references, and TL;DR.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "paper_id": {
+       "type": "string",
+       "description": "Paper identifier: Semantic Scholar ID, 'arXiv:2301.00001', or 'DOI:10.xxx/yyy'"
+      }
+     },
+     "required": [
+      "paper_id"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "wikipedia_summary",
+    "description": "Get a Wikipedia summary for a topic. Useful for providing context, definitions, or background on concepts mentioned in papers.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "topic": {
+       "type": "string",
+       "description": "Topic to look up"
+      }
+     },
+     "required": [
+      "topic"
+     ]
+    }
+   }
+  }
+ ],
+ "books": [
+  {
+   "type": "function",
+   "function": {
+    "name": "search_books",
+    "description": "Search Open Library for books by title, author, subject, or free-text query. Returns top matches with authors, first publish year, page count, rating, and subjects.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "description": "Search query, e.g. 'Isaac Asimov', 'history of Rome', or 'machine learning'"
+      }
+     },
+     "required": [
+      "query"
+     ]
+    }
+   }
+  }
+ ],
+ "github": [
+  {
+   "type": "function",
+   "function": {
+    "name": "search_repos",
+    "description": "Search GitHub repositories by keyword, sorted by stars. Returns the top 10 matches.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "description": "Search keywords, e.g. 'rust async runtime' or 'a2a protocol'"
+      }
+     },
+     "required": [
+      "query"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "get_repo",
+    "description": "Get an overview of a repository: description, stars, forks, open issues, language, license, topics.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "owner": {
+       "type": "string",
+       "description": "Repository owner, e.g. 'golang'"
+      },
+      "repo": {
+       "type": "string",
+       "description": "Repository name, e.g. 'go'"
+      }
+     },
+     "required": [
+      "owner",
+      "repo"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "get_readme",
+    "description": "Fetch the README of a repository.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "owner": {
+       "type": "string",
+       "description": "Repository owner"
+      },
+      "repo": {
+       "type": "string",
+       "description": "Repository name"
+      }
+     },
+     "required": [
+      "owner",
+      "repo"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "get_contents",
+    "description": "List the contents of a directory in a repository, or read a file's contents. Leave path empty for the repository root.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "owner": {
+       "type": "string",
+       "description": "Repository owner"
+      },
+      "repo": {
+       "type": "string",
+       "description": "Repository name"
+      },
+      "path": {
+       "type": "string",
+       "description": "Path inside the repo, e.g. 'src/net'. Empty string means the repo root."
+      }
+     },
+     "required": [
+      "owner",
+      "repo"
+     ]
+    }
+   }
+  }
+ ],
+ "hackernews": [
+  {
+   "type": "function",
+   "function": {
+    "name": "top_stories",
+    "description": "Get the current top stories from the Hacker News front page.",
+    "parameters": {
+     "type": "object",
+     "properties": {}
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "search_stories",
+    "description": "Search Hacker News (via Algolia) for stories matching a query.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "description": "Search keywords, e.g. 'Rust' or 'AI agents'"
+      }
+     },
+     "required": [
+      "query"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "get_item",
+    "description": "Get details (title, score, author, comments, URL) for a Hacker News item by its numeric ID.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "id": {
+       "type": "integer",
+       "description": "Hacker News item ID"
+      }
+     },
+     "required": [
+      "id"
+     ]
+    }
+   }
+  }
+ ],
+ "weather": [
+  {
+   "type": "function",
+   "function": {
+    "name": "geocode",
+    "description": "Resolve a place name (city, region, landmark) to coordinates and a canonical name.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "location": {
+       "type": "string",
+       "description": "Place name, e.g. 'Paris' or 'Tokyo, Japan'"
+      }
+     },
+     "required": [
+      "location"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "get_weather",
+    "description": "Get current conditions and a 3-day forecast for coordinates from geocode.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "latitude": {
+       "type": "number",
+       "description": "Latitude"
+      },
+      "longitude": {
+       "type": "number",
+       "description": "Longitude"
+      },
+      "label": {
+       "type": "string",
+       "description": "Human-readable place name from geocode"
+      }
+     },
+     "required": [
+      "latitude",
+      "longitude"
+     ]
+    }
+   }
+  }
+ ]
+}
